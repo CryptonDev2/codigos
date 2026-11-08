@@ -1,0 +1,87 @@
+local Players = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local BanDataStore = DataStoreService:GetDataStore("PermanentBanList_v1")
+
+local DETECT_FLY_SPEED = 65
+local MAX_TELEPORT_DISTANCE = 50
+local MIN_ACCOUNT_AGE = 7
+
+local function checkPlayerBan(player)
+	local userId = player.UserId
+	local success, banInfo = pcall(function()
+		return BanDataStore:GetAsync(tostring(userId))
+	end)
+	
+	if success and banInfo then
+		player:Kick("\n[Baneo Permanente]\n\nHas sido vetado de este juego por uso de exploits.\nMotivo: " .. (banInfo.Reason or "No especificado"))
+		return true
+	end
+	
+	if player.AccountAge < MIN_ACCOUNT_AGE then
+		player:Kick("\n[Seguridad]\n\nTu cuenta es demasiado nueva (" .. player.AccountAge .. " días). Requieres al menos " .. MIN_ACCOUNT_AGE .. " días para jugar. Esto previene la evasión de bans.")
+		return true
+	end
+	
+	return false
+end
+
+_G.BanPlayer = function(player, reason)
+	local userId = player.UserId
+	local banData = {
+		Reason = reason,
+		Timestamp = os.time()
+	}
+	
+	pcall(function()
+		BanDataStore:SetAsync(tostring(userId), banData)
+	end)
+	
+	player:Kick("\n[Anticheat]\n\nHas sido baneado permanentemente.\nMotivo: " .. reason)
+end
+
+local function monitorExploits(player, character)
+	local rootPart = character:WaitForChild("HumanoidRootPart", 5)
+	local humanoid = character:WaitForChild("Humanoid", 5)
+	if not rootPart or not humanoid then return end
+	
+	local lastPosition = rootPart.Position
+	local lastTime = tick()
+	
+	while character:IsDescendantOf(workspace) do
+		task.wait(0.5)
+		if not rootPart or not rootPart.Parent then break end
+		
+		local currentPosition = rootPart.Position
+		local currentTime = tick()
+		local deltaTime = currentTime - lastTime
+		
+		if deltaTime <= 0 then deltaTime = 0.01 end
+		
+		local horizontalDistance = (Vector3.new(currentPosition.X, 0, currentPosition.Z) - Vector3.new(lastPosition.X, 0, lastPosition.Z)).Magnitude
+		local verticalDistance = currentPosition.Y - lastPosition.Y
+		local verticalSpeed = verticalDistance / deltaTime
+		
+		if verticalSpeed > DETECT_FLY_SPEED and humanoid:GetState() ~= Enum.HumanoidStateType.Freefall and humanoid.SeatPart == nil then
+			_G.BanPlayer(player, "Uso de Fly / Salto modificado ilegalmente.")
+			break
+		end
+		
+		if horizontalDistance > (MAX_TELEPORT_DISTANCE * deltaTime) and humanoid.SeatPart == nil then
+			if currentPosition.Y > workspace.FallenPartsDestroyHeight then
+				_G.BanPlayer(player, "Detección de Teleportación / No-Clip.")
+				break
+			end
+		end
+		
+		lastPosition = currentPosition
+		lastTime = currentTime
+	end
+end
+
+Players.PlayerAdded:Connect(function(player)
+	if checkPlayerBan(player) then return end
+	
+	player.CharacterAdded:Connect(function(character)
+		task.spawn(monitorExploits, player, character)
+	end)
+end)
